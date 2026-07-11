@@ -1,0 +1,13 @@
+[Unit]
+Description=LANlord - gateway connectivity monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 %h/lanlord/lanlord.py --web
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
