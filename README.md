@@ -323,11 +323,11 @@ these two things first:
    these Python f-strings directly if you want different wording.
 
 2. **Python doesn't hot-reload.** If the process is already running
-   (a manual `--web` session, or the launchd/systemd service), it has
-   the old code loaded in memory. Any edit needs a restart to take
-   effect:
+   (a manual `--web` session, or a launchd/systemd/Task Scheduler
+   service), it has the old code loaded in memory. Any edit needs a
+   restart to take effect:
    ```bash
-   # Manual run: just Ctrl+C and re-run it
+   # Manual run (any OS): just Ctrl+C and re-run it
 
    # macOS launchd service:
    launchctl bootout gui/$(id -u)/com.user.lanlord
@@ -336,6 +336,18 @@ these two things first:
    # Linux systemd service:
    systemctl --user restart lanlord.service
    ```
+   ```powershell
+   # Windows Task Scheduler service:
+   Stop-ScheduledTask -TaskName "LANlord"
+   Start-ScheduledTask -TaskName "LANlord"
+
+   # If it's just running in a terminal/PowerShell window instead:
+   # Ctrl+C, then re-run the same command
+   ```
+   On Windows, if you started it via `Register-ScheduledTask` (see
+   "Running at startup" below) rather than a plain terminal window, you
+   can also just log off and back on — `AtLogOn` triggers a fresh start
+   automatically.
 
 ## Notes and caveats
 
