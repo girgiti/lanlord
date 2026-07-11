@@ -324,7 +324,7 @@ def monitor_loop(args, on_status_change=None, on_network_change=None):
                 if gateway:
                     log_event(f"Gateway {gateway} DOWN")
                 else:
-                    log_event("No network detected - DOWN")
+                    log_event("No network detected - Gateway DOWN")
                 if on_status_change:
                     on_status_change(True, args, down_since, gateway)
 
