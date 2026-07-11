@@ -321,7 +321,10 @@ def monitor_loop(args, on_status_change=None, on_network_change=None):
                 down_since = datetime.now()
                 with state_lock:
                     state["status"] = "down"
-                log_event(f"Gateway {gateway} DOWN")
+                if gateway:
+                    log_event(f"Gateway {gateway} DOWN")
+                else:
+                    log_event("No network detected - DOWN")
                 if on_status_change:
                     on_status_change(True, args, down_since, gateway)
 
@@ -370,10 +373,16 @@ def run_cli(args):
 
     def on_change(is_down, args, down_since, gateway):
         if is_down:
-            print(f"[{timestamp()}] ALERT: Gateway {gateway} is DOWN "
-                  f"(after {args.fail_threshold} failed pings)")
-            notify("Network Down", f"Lost connectivity to gateway {gateway}",
-                   sound=not args.no_sound)
+            if gateway:
+                print(f"[{timestamp()}] ALERT: Gateway {gateway} is DOWN "
+                      f"(after {args.fail_threshold} failed pings)")
+                notify("Network Down", f"Lost connectivity to gateway {gateway}",
+                       sound=not args.no_sound)
+            else:
+                print(f"[{timestamp()}] ALERT: No network detected "
+                      f"(after {args.fail_threshold} failed pings)")
+                notify("Network Down", "No network detected - connection lost",
+                       sound=not args.no_sound)
         else:
             duration = format_duration(down_since)
             suffix = f" (was down for {duration})" if duration else ""
@@ -547,8 +556,12 @@ def run_web(args):
 
     def on_change(is_down, args, down_since, gateway):
         if is_down:
-            notify("Network Down", f"Lost connectivity to gateway {gateway}",
-                   sound=not args.no_sound)
+            if gateway:
+                notify("Network Down", f"Lost connectivity to gateway {gateway}",
+                       sound=not args.no_sound)
+            else:
+                notify("Network Down", "No network detected - connection lost",
+                       sound=not args.no_sound)
         else:
             duration = format_duration(down_since)
             suffix = f" (was down for {duration})" if duration else ""
