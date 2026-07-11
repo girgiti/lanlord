@@ -305,6 +305,38 @@ Get-ScheduledTask -TaskName "LANlord"
 Unregister-ScheduledTask -TaskName "LANlord" -Confirm:$false   # remove
 ```
 
+## Customizing messages / troubleshooting edits
+
+If you edit the script and a change doesn't seem to take effect, check
+these two things first:
+
+1. **Alert text lives in Python, not in the HTML.** The `PAGE_HTML`
+   block only renders whatever text it's given — it doesn't generate any
+   of the actual alert wording. The messages themselves (including the
+   `(none detected)` fallback shown when no gateway can be found) are
+   built in `monitor_loop()`, `run_cli()`, and `run_web()` as plain
+   Python f-strings, e.g.:
+   ```python
+   log_event(f"Gateway {gateway or '(none detected)'} DOWN")
+   ```
+   Editing the HTML/JS section won't change this — you need to edit
+   these Python f-strings directly if you want different wording.
+
+2. **Python doesn't hot-reload.** If the process is already running
+   (a manual `--web` session, or the launchd/systemd service), it has
+   the old code loaded in memory. Any edit needs a restart to take
+   effect:
+   ```bash
+   # Manual run: just Ctrl+C and re-run it
+
+   # macOS launchd service:
+   launchctl bootout gui/$(id -u)/com.user.lanlord
+   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.user.lanlord.plist
+
+   # Linux systemd service:
+   systemctl --user restart lanlord.service
+   ```
+
 ## Notes and caveats
 
 - **Sleep pauses everything.** If your machine sleeps, the ping loop
