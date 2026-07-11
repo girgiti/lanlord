@@ -370,9 +370,9 @@ def run_cli(args):
 
     def on_change(is_down, args, down_since, gateway):
         if is_down:
-            print(f"[{timestamp()}] ALERT: Gateway {gateway or '(none detected)'} is DOWN "
+            print(f"[{timestamp()}] ALERT: Gateway {gateway} is DOWN "
                   f"(after {args.fail_threshold} failed pings)")
-            notify("Network Down", f"Lost connectivity to gateway {gateway or '(none detected)'}",
+            notify("Network Down", f"Lost connectivity to gateway {gateway}",
                    sound=not args.no_sound)
         else:
             duration = format_duration(down_since)
@@ -547,7 +547,7 @@ def run_web(args):
 
     def on_change(is_down, args, down_since, gateway):
         if is_down:
-            notify("Network Down", f"Lost connectivity to gateway {gateway or '(none detected)'}",
+            notify("Network Down", f"Lost connectivity to gateway {gateway}",
                    sound=not args.no_sound)
         else:
             duration = format_duration(down_since)
