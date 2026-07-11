@@ -321,7 +321,7 @@ def monitor_loop(args, on_status_change=None, on_network_change=None):
                 down_since = datetime.now()
                 with state_lock:
                     state["status"] = "down"
-                log_event(f"Gateway {gateway or '(none detected)'} DOWN")
+                log_event(f"Gateway {gateway} DOWN")
                 if on_status_change:
                     on_status_change(True, args, down_since, gateway)
 
