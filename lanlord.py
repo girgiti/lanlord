@@ -116,8 +116,12 @@ def detect_macos():
             )
             if m:
                 ip = m.group(1)
-                if not gateway:
-                    gateway = m.group(2)
+                peer = m.group(2)
+                # Some VPN clients set the peer address identical to the
+                # local address as a placeholder - that's not a real
+                # second endpoint, so don't treat it as a gateway.
+                if not gateway and peer != ip:
+                    gateway = peer
                 netmask_int = int(m.group(3), 16)
                 netmask = ".".join(str((netmask_int >> (8 * i)) & 0xFF) for i in (3, 2, 1, 0))
     return interface, gateway, ip, netmask
@@ -141,8 +145,12 @@ def detect_linux():
     peer_m = re.search(r"inet ([\d.]+) peer ([\d.]+)/(\d+)", addr_output)
     if peer_m:
         ip = peer_m.group(1)
-        if not gateway:
-            gateway = peer_m.group(2)
+        peer = peer_m.group(2)
+        # Some VPN clients set the peer address identical to the local
+        # address as a placeholder - that's not a real second endpoint,
+        # so don't treat it as a gateway.
+        if not gateway and peer != ip:
+            gateway = peer
         netmask = cidr_to_netmask(peer_m.group(3))
     else:
         addr_m = re.search(r"inet ([\d.]+)/(\d+)", addr_output)
@@ -299,7 +307,13 @@ def log_event(event):
 def monitor_loop(args, on_status_change=None, on_network_change=None):
     """Pings the gateway on a schedule, re-detecting the network every
     cycle so it follows changes automatically (switching Wi-Fi, hotspot,
-    VPN, a new DHCP lease with a different subnet/CIDR, etc.)."""
+    VPN, a new DHCP lease with a different subnet/CIDR, etc.).
+
+    If no real gateway can be detected at all (fully offline, or a VPN
+    tunnel with no meaningful peer address), falls back to pinging
+    args.probe_host - a known-reliable external host - so a working
+    internet connection through a tunnel isn't wrongly reported as
+    down just because there's no traditional router to ping."""
     is_down = False
     down_since = None
     last_gateway = None
@@ -308,16 +322,27 @@ def monitor_loop(args, on_status_change=None, on_network_change=None):
     while True:
         interface, gateway, ip, netmask = detect_network_safe(args)
 
+        # What we actually ping: the detected gateway if we have one,
+        # otherwise a known-reliable external probe host as a fallback
+        # connectivity check (covers VPN tunnels with no meaningful
+        # gateway/peer address, as well as being fully offline).
+        using_probe = gateway is None and ip is not None
+        ping_target = gateway if gateway else (args.probe_host if using_probe else None)
+        display_target = gateway if gateway else (f"{args.probe_host} (probe)" if using_probe else None)
+
+        # A "network change" is a real switch to a different interface or
+        # gateway - not the transition into/out of being fully offline
+        # (that's just a DOWN/UP event, already logged separately).
         network_changed = (
-            last_gateway is not None
-            and gateway is not None
-            and (gateway != last_gateway or interface != last_interface)
+            last_interface is not None
+            and interface is not None
+            and (interface != last_interface or gateway != last_gateway)
         )
         if network_changed:
-            log_event(f"Network changed - IP "
-                      f"{ip or 'unknown'}, gateway {gateway}")
+            log_event(f"Network changed - IP {ip or 'unknown'}, "
+                      f"gateway {display_target or 'unknown'}")
             if on_network_change:
-                on_network_change(interface, gateway, ip, netmask)
+                on_network_change(interface, display_target, ip, netmask)
             # Old failure streak/down-state was against the previous
             # network - start fresh evaluation against the new one.
             with state_lock:
@@ -327,9 +352,9 @@ def monitor_loop(args, on_status_change=None, on_network_change=None):
         last_interface = interface
 
         with state_lock:
-            state.update(interface=interface, gateway=gateway, ip=ip, netmask=netmask)
+            state.update(interface=interface, gateway=display_target, ip=ip, netmask=netmask)
 
-        reachable = ping_host(gateway, timeout=args.timeout) if gateway else False
+        reachable = ping_host(ping_target, timeout=args.timeout) if ping_target else False
         now = timestamp()
 
         with state_lock:
@@ -342,9 +367,9 @@ def monitor_loop(args, on_status_change=None, on_network_change=None):
                 is_down = False
                 with state_lock:
                     state["status"] = "up"
-                log_event(f"Gateway {gateway} back UP")
+                log_event(f"Gateway {display_target} back UP")
                 if on_status_change:
-                    on_status_change(False, args, down_since, gateway)
+                    on_status_change(False, args, down_since, display_target)
                 down_since = None
         else:
             if failures >= args.fail_threshold and not is_down:
@@ -352,12 +377,12 @@ def monitor_loop(args, on_status_change=None, on_network_change=None):
                 down_since = datetime.now()
                 with state_lock:
                     state["status"] = "down"
-                if gateway:
-                    log_event(f"Gateway {gateway} DOWN")
+                if display_target:
+                    log_event(f"Gateway {display_target} DOWN")
                 else:
                     log_event("No network detected - DOWN")
                 if on_status_change:
-                    on_status_change(True, args, down_since, gateway)
+                    on_status_change(True, args, down_since, display_target)
 
         time.sleep(args.interval)
 
@@ -657,6 +682,9 @@ def main():
                          help="Manually specify the gateway IP if auto-detect fails")
     parser.add_argument("--interface", type=str, default=None,
                          help="Manually specify the network interface name (cosmetic only)")
+    parser.add_argument("--probe-host", type=str, default="1.1.1.1",
+                         help="Fallback host to ping when no real gateway can be detected "
+                              "(e.g. VPN tunnels with no meaningful peer address). Default: 1.1.1.1")
     args = parser.parse_args()
 
     if args.web:

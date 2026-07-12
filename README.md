@@ -140,6 +140,7 @@ single dropped packet.
 | `--port` | `8765` | Web server port (web mode only) |
 | `--gateway IP` | auto | Manually specify the gateway if auto-detect fails |
 | `--interface NAME` | auto | Manually specify the interface name (cosmetic only) |
+| `--probe-host IP` | `1.1.1.1` | Fallback ping target used when no real gateway can be detected (e.g. VPN tunnels with no meaningful peer address) |
 
 ### Sample commands
 
@@ -161,6 +162,9 @@ python3 lanlord.py --gateway 192.168.1.1
 
 # Longer ping timeout for a slow/high-latency network
 python3 lanlord.py --timeout 3
+
+# Use a different fallback probe host (e.g. your own DNS server) instead of 1.1.1.1
+python3 lanlord.py --probe-host 8.8.8.8
 ```
 
 ## How it works
@@ -179,22 +183,27 @@ python3 lanlord.py --timeout 3
 Regular Wi-Fi/Ethernet networks have a router with its own address (the
 "gateway") that's different from your machine's address. Point-to-point
 VPN tunnels (WireGuard, IPsec, OpenVPN, etc. — interfaces named
-`utun`/`ipsec0`/`tun0` and similar) don't work that way: there's no
-separate router, just your end of the tunnel and the far end. Because of
-that, `route`/`ip route` won't report a traditional gateway for these
-interfaces at all.
+`utun`/`ipsec0`/`tun0` and similar) don't always work that way. Two cases:
 
-LANlord handles this by detecting point-to-point interfaces and pinging
-the **tunnel's peer address** instead (the other end of the tunnel) — on
-macOS this is the `--> <address>` shown by `ifconfig`; on Linux it's the
-`peer <address>` shown by `ip addr`. This is a reasonable stand-in for
-"is the tunnel actually up," though it's a different thing conceptually
-than a LAN gateway.
+1. **Tunnel with a real, distinct peer address.** LANlord detects this
+   (the `--> <address>` shown by macOS `ifconfig`, or `peer <address>`
+   shown by Linux `ip addr`) and pings that peer directly, same as a
+   normal gateway.
+2. **Tunnel with no meaningful peer address.** Some VPN clients set the
+   peer/remote address identical to your own local address as a
+   placeholder — there's genuinely nothing distinct to ping there. When
+   LANlord detects this (or any case where no real gateway can be found
+   at all), it falls back to pinging `--probe-host` (default `1.1.1.1`)
+   instead — a known-reliable external host, so a working internet
+   connection through the tunnel is correctly reported as UP rather than
+   being marked down just because there's no traditional router to ping.
+   The dashboard/log will show this as e.g. `1.1.1.1 (probe)` in the
+   gateway field, so it's clear what's actually being checked.
 
 If your specific VPN client presents its virtual interface in a format
-this doesn't recognize, `--gateway` still works as a manual override —
-and feel free to open an issue with your `ifconfig`/`ip addr` output for
-that interface so it can be added.
+this doesn't recognize at all, `--gateway` still works as a manual
+override — and feel free to open an issue with your `ifconfig`/`ip addr`
+output for that interface so detection can be improved.
 
 - **Web mode** is a plain `http.server` instance serving one JSON
   endpoint (`/status`) and one HTML page that polls it every 3 seconds —
