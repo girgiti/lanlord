@@ -339,8 +339,9 @@ def monitor_loop(args, on_status_change=None, on_network_change=None):
             and (interface != last_interface or gateway != last_gateway)
         )
         if network_changed:
-            log_event(f"Network changed - IP {ip or 'unknown'}, "
-                      f"gateway {display_target or 'unknown'}")
+            gw_desc = (f"probe gateway ({args.probe_host}) reachable" if using_probe
+                       else f"gateway {display_target or 'unknown'}")
+            log_event(f"Network changed - IP {ip or 'unknown'}, {gw_desc}")
             if on_network_change:
                 on_network_change(interface, display_target, ip, netmask)
             # Old failure streak/down-state was against the previous
