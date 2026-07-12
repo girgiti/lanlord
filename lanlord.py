@@ -99,25 +99,56 @@ def detect_macos():
     ip, netmask = None, None
     if interface:
         ifout = run_cmd(f"ifconfig {interface}")
+        # Standard LAN-style interface: "inet <ip> netmask <hex>"
         m = re.search(r"inet (\d+\.\d+\.\d+\.\d+) netmask (0x[0-9a-fA-F]+)", ifout)
         if m:
             ip = m.group(1)
             netmask_int = int(m.group(2), 16)
             netmask = ".".join(str((netmask_int >> (8 * i)) & 0xFF) for i in (3, 2, 1, 0))
+        else:
+            # Point-to-point interface (VPN tunnels: utun, ipsec, ppp, etc.):
+            # "inet <local> --> <peer> netmask <hex>". There's no separate
+            # router here - the peer IS the other end of the tunnel, so we
+            # treat it as the thing to ping.
+            m = re.search(
+                r"inet (\d+\.\d+\.\d+\.\d+) --> (\d+\.\d+\.\d+\.\d+) netmask (0x[0-9a-fA-F]+)",
+                ifout,
+            )
+            if m:
+                ip = m.group(1)
+                if not gateway:
+                    gateway = m.group(2)
+                netmask_int = int(m.group(3), 16)
+                netmask = ".".join(str((netmask_int >> (8 * i)) & 0xFF) for i in (3, 2, 1, 0))
     return interface, gateway, ip, netmask
 
 
 def detect_linux():
     output = run_cmd("ip route show default")
-    m = re.search(r"default via ([\d.]+) dev (\S+)", output)
+    # Point-to-point tunnels often have no "via <ip>" - just "default dev tunX"
+    m = re.search(r"default(?: via ([\d.]+))? dev (\S+)", output)
     if not m:
         return None, None, None, None
     gateway, interface = m.group(1), m.group(2)
 
     addr_output = run_cmd(f"ip -4 addr show dev {interface}")
-    addr_m = re.search(r"inet ([\d.]+)/(\d+)", addr_output)
-    ip = addr_m.group(1) if addr_m else None
-    netmask = cidr_to_netmask(addr_m.group(2)) if addr_m else None
+
+    # Point-to-point tunnels (VPNs) report addresses as:
+    #   inet <local> peer <remote>/<cidr>
+    # rather than the usual "inet <local>/<cidr>". The local IP has no
+    # CIDR of its own in this format, so it needs its own pattern - the
+    # ordinary "inet <ip>/<cidr>" regex below would miss it entirely.
+    peer_m = re.search(r"inet ([\d.]+) peer ([\d.]+)/(\d+)", addr_output)
+    if peer_m:
+        ip = peer_m.group(1)
+        if not gateway:
+            gateway = peer_m.group(2)
+        netmask = cidr_to_netmask(peer_m.group(3))
+    else:
+        addr_m = re.search(r"inet ([\d.]+)/(\d+)", addr_output)
+        ip = addr_m.group(1) if addr_m else None
+        netmask = cidr_to_netmask(addr_m.group(2)) if addr_m else None
+
     return interface, gateway, ip, netmask
 
 
@@ -324,7 +355,7 @@ def monitor_loop(args, on_status_change=None, on_network_change=None):
                 if gateway:
                     log_event(f"Gateway {gateway} DOWN")
                 else:
-                    log_event("No network detected - Gateway DOWN")
+                    log_event("No network detected - DOWN")
                 if on_status_change:
                     on_status_change(True, args, down_since, gateway)
 
@@ -554,21 +585,36 @@ def run_web(args):
     with state_lock:
         state.update(interface=interface, gateway=gateway, ip=ip, netmask=netmask, status="up")
 
+    def on_network_change(interface, gateway, ip, netmask):
+        cidr = netmask_to_cidr(netmask)
+        print(f"[{timestamp()}] Network changed - now on {interface or 'unknown'}, "
+              f"IP {ip or 'unknown'}" + (f"/{cidr}" if cidr else "") +
+              f", gateway {gateway or 'unknown'}")
+
     def on_change(is_down, args, down_since, gateway):
         if is_down:
             if gateway:
+                print(f"[{timestamp()}] ALERT: Gateway {gateway} is DOWN "
+                      f"(after {args.fail_threshold} failed pings)")
                 notify("Network Down", f"Lost connectivity to gateway {gateway}",
                        sound=not args.no_sound)
             else:
+                print(f"[{timestamp()}] ALERT: No network detected "
+                      f"(after {args.fail_threshold} failed pings)")
                 notify("Network Down", "No network detected - connection lost",
                        sound=not args.no_sound)
         else:
             duration = format_duration(down_since)
             suffix = f" (was down for {duration})" if duration else ""
+            print(f"[{timestamp()}] Gateway {gateway} is back UP{suffix}")
             notify("Network Restored", f"Gateway {gateway} is reachable again.{suffix}",
                    sound=not args.no_sound)
 
-    t = threading.Thread(target=monitor_loop, args=(args, on_change), daemon=True)
+    t = threading.Thread(
+        target=monitor_loop,
+        args=(args, on_change, on_network_change),
+        daemon=True,
+    )
     t.start()
 
     server = HTTPServer(("127.0.0.1", args.port), MonitorHandler)

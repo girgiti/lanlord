@@ -13,8 +13,12 @@ library — no `pip install` required.
    default gateway.
 2. Pings the gateway on a schedule (default: every 10 seconds).
 3. **Automatically follows network changes** — switching Wi-Fi, hotspot,
-   VPN, or getting a new DHCP lease with a totally different subnet is
+   or getting a new DHCP lease with a totally different subnet is
    detected on the fly and pinging continues against the new gateway.
+   For point-to-point VPN tunnels (WireGuard, IPsec, etc. - interfaces
+   like `utun`/`ipsec0`/`tun0`), there's no traditional router, so
+   LANlord pings the tunnel's peer address instead - see
+   [VPN behavior](#vpn-and-point-to-point-tunnels) below.
 4. When a configurable number of consecutive pings fail, it fires an alert:
    - A native OS notification (Notification Center / libnotify / Windows
      toast) and a sound
@@ -164,14 +168,41 @@ python3 lanlord.py --timeout 3
 - **Gateway/IP/subnet detection** uses OS-native commands:
   `route`/`ifconfig` on macOS, `ip route`/`ip addr` on Linux, `ipconfig`
   on Windows — re-run on every ping cycle, so it follows network changes
-  automatically. If auto-detection fails on your setup (unusual network
-  configs, VPNs, etc.), override it manually with `--gateway`.
+  automatically. If auto-detection ever fails on an unusual setup,
+  override it manually with `--gateway`.
 - **Pinging** uses the OS's native `ping` binary with the correct flags
   per platform (`-c`/`-W` on Linux, `-c`/`-t` on macOS, `-n`/`-w` on
   Windows).
+
+### VPN and point-to-point tunnels
+
+Regular Wi-Fi/Ethernet networks have a router with its own address (the
+"gateway") that's different from your machine's address. Point-to-point
+VPN tunnels (WireGuard, IPsec, OpenVPN, etc. — interfaces named
+`utun`/`ipsec0`/`tun0` and similar) don't work that way: there's no
+separate router, just your end of the tunnel and the far end. Because of
+that, `route`/`ip route` won't report a traditional gateway for these
+interfaces at all.
+
+LANlord handles this by detecting point-to-point interfaces and pinging
+the **tunnel's peer address** instead (the other end of the tunnel) — on
+macOS this is the `--> <address>` shown by `ifconfig`; on Linux it's the
+`peer <address>` shown by `ip addr`. This is a reasonable stand-in for
+"is the tunnel actually up," though it's a different thing conceptually
+than a LAN gateway.
+
+If your specific VPN client presents its virtual interface in a format
+this doesn't recognize, `--gateway` still works as a manual override —
+and feel free to open an issue with your `ifconfig`/`ip addr` output for
+that interface so it can be added.
+
 - **Web mode** is a plain `http.server` instance serving one JSON
   endpoint (`/status`) and one HTML page that polls it every 3 seconds —
   no frameworks, no build step.
+- **Logging is consistent across modes.** Every up/down/network-change
+  event is printed to stdout in both CLI and web mode, so whatever's in
+  `/tmp/lanlord.log` (or your systemd/Task Scheduler logs) matches what
+  the web dashboard's history panel shows.
 
 ## Testing it — simulating outages and network changes
 
