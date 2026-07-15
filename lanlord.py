@@ -42,6 +42,7 @@ import socket
 import threading
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from concurrent.futures import ThreadPoolExecutor
 
 SYSTEM = platform.system()  # "Darwin", "Linux", "Windows"
 
@@ -288,6 +289,11 @@ def timestamp():
 state_lock = threading.Lock()
 state = {
     "status": "unknown",
+
+    "gateway_status": None,
+    "internet_status": None,
+    "probe_results": {},
+
     "gateway": None,
     "interface": None,
     "ip": None,
@@ -355,7 +361,49 @@ def monitor_loop(args, on_status_change=None, on_network_change=None):
         with state_lock:
             state.update(interface=interface, gateway=display_target, ip=ip, netmask=netmask)
 
-        reachable = ping_host(ping_target, timeout=args.timeout) if ping_target else False
+        #reachable = ping_host(ping_target, timeout=args.timeout) if ping_target else False
+
+        internet_probes = {
+            "Cloudflare": "1.1.1.1",
+            "Google DNS": "8.8.8.8",
+            "Quad9": "9.9.9.9",
+        }
+
+        def do_ping(host):
+                return ping_host(host, timeout=args.timeout)
+
+        targets = {}
+
+        if ping_target:
+            targets["Gateway"] = ping_target
+
+        for name, host in internet_probes.items():
+            targets[name] = host
+
+        with ThreadPoolExecutor(max_workers=len(targets)) as executor:
+            futures = {
+                name: executor.submit(do_ping, host)
+                for name, host in targets.items()
+            }
+
+        results = {
+                name: future.result()
+                for name, future in futures.items()
+        }
+
+        gateway_reachable = results.get("Gateway", False)
+
+        internet_reachable = any(
+            results[name]
+            for name in internet_probes.keys()
+        )
+
+        with state_lock:
+            state["gateway_status"] = gateway_reachable
+            state["internet_status"] = internet_reachable
+            state["probe_results"] = results.copy()
+            
+        reachable = gateway_reachable and internet_reachable
         now = timestamp()
 
         with state_lock:
@@ -476,6 +524,28 @@ PAGE_HTML = """<!DOCTYPE html>
   .footer { margin-top:20px; text-align:center; font-size:12px; color:#5a5a5c; }
   .footer a { color:#5a5a5c; text-decoration:none; }
   .footer a:hover { color:#8e8e93; text-decoration:underline; }
+  .dot {
+    display:inline-block;
+    width:10px;
+    height:10px;
+    border-radius:50%;
+    margin-right:8px;
+    animation:pulse 1.2s infinite;
+  }
+
+  .green {
+    background:#32d74b;
+  }
+
+  .red {
+    background:#ff453a;
+  }
+
+  @keyframes pulse {
+    0%   { opacity:1; }
+    50%  { opacity:.25; }
+    100% { opacity:1; }
+  }
 </style>
 </head>
 <body>
@@ -486,6 +556,19 @@ PAGE_HTML = """<!DOCTYPE html>
   <div class="row"><span>Local IP</span><span id="ip">-</span></div>
   <div class="row"><span>Netmask</span><span id="netmask">-</span></div>
   <div class="row"><span>Gateway</span><span id="gateway">-</span></div>
+  <h3 style="margin-top:20px;">Connectivity</h3>
+
+  <div class="row">
+      <span>Gateway</span>
+      <span id="gatewayStatus">...</span>
+  </div>
+
+  <div class="row">
+      <span>Internet</span>
+      <span id="internetStatus">...</span>
+  </div>
+
+  <div id="probes" style="margin-top:10px;"></div>
   <div class="row"><span>Last check</span><span id="lastcheck">-</span></div>
   <div id="history"></div>
   <div class="footer">LANlord &middot; built by <a href="https://github.com/girgiti" target="_blank" rel="noopener">@girgiti</a></div>
@@ -536,7 +619,31 @@ async function poll() {
     document.getElementById("netmask").textContent = data.netmask || "-";
     document.getElementById("gateway").textContent = data.gateway || "-";
     document.getElementById("lastcheck").textContent = data.last_check || "-";
+    
+    function dot(ok){
+        return `<span class="dot ${ok ? "green" : "red"}"></span>`;
+    }
 
+    document.getElementById("gatewayStatus").innerHTML =
+        dot(data.gateway_status) +
+        (data.gateway_status ? "Connected" : "Disconnected");
+
+    document.getElementById("internetStatus").innerHTML =
+        dot(data.internet_status) +
+        (data.internet_status ? "Available" : "Unavailable");
+    
+    const probes = document.getElementById("probes");
+
+    probes.innerHTML = Object.entries(data.probe_results || {})
+        .filter(([name]) => name !== "Gateway")
+        .map(([name, ok]) => `
+            <div class="row">
+                <span>${name}</span>
+                <span>${dot(ok)}${ok ? "UP" : "DOWN"}</span>
+            </div>
+    `   )
+        .join("");
+    
     const el = document.getElementById("status");
     if (data.status === "down") {
       el.textContent = "DOWN";
