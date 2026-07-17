@@ -1,8 +1,6 @@
 # LANlord
 
-A tiny, dependency-free tool that watches your default network gateway and
-alerts you the moment your connection drops — on your desktop and in a
-browser tab.
+A tiny, dependency-free network monitor that watches both your local gateway and internet connectivity, distinguishing LAN failures from ISP/WAN outages, with desktop and browser alerts.
 
 Works on **macOS, Linux, and Windows**. Uses only the Python standard
 library — no `pip install` required.
@@ -11,7 +9,17 @@ library — no `pip install` required.
 
 1. Auto-detects your active network interface, local IP, subnet, and
    default gateway.
-2. Pings the gateway on a schedule (default: every 10 seconds).
+2. Independently monitors:
+   - Your local gateway
+   - Internet connectivity via multiple public endpoints
+
+3. Internet connectivity is verified concurrently against:
+   - Cloudflare DNS (1.1.1.1)
+   - Google Public DNS (8.8.8.8)
+   - Quad9 DNS (9.9.9.9)
+
+   Internet is considered available if **any** provider responds, avoiding
+   false alarms caused by a single endpoint outage.
 3. **Automatically follows network changes** — switching Wi-Fi, hotspot,
    or getting a new DHCP lease with a totally different subnet is
    detected on the fly and pinging continues against the new gateway.
@@ -31,8 +39,7 @@ library — no `pip install` required.
 - Python 3.7+ (already installed on macOS and most Linux distros; on
   Windows, install from [python.org](https://www.python.org/downloads/)
   or the Microsoft Store)
-- No third-party packages. Everything used (`http.server`, `socket`,
-  `subprocess`, `threading`) is part of the standard library.
+- No third-party packages. Everything used (`http.server`, `socket`, `subprocess`, `threading`, `concurrent.futures`) is part of the standard library.
 - **Linux only, optional:** `notify-send` (usually part of `libnotify-bin`
   / `libnotify`) for desktop popups:
   ```bash
@@ -105,11 +112,47 @@ default browser automatically.
    the server and ping loop keep running regardless.
 
 While it's open, you'll see:
-- Live interface / IP / netmask / gateway / last-check info
-- A big status indicator (UP / DOWN)
-- The tab title blinking `GATEWAY DOWN` when the connection drops
-- A browser notification + beep on every state change
-- A scrolling history log of every up/down/network-change event
+- Live Gateway and Internet status
+- Live interface / IP / netmask / gateway information
+- External connectivity probes (Cloudflare, Google DNS and Quad9)
+- Blinking green/red health indicators
+- Context-aware warning banner
+- Browser notifications that distinguish **Gateway Unreachable** from **Internet Unavailable**
+- Dynamic browser tab title (`🚨 GATEWAY DOWN` / `🚨 INTERNET DOWN`)
+- Event history showing gateway failures, internet outages, recoveries and network changes
+
+
+## Connectivity monitoring
+
+LANlord performs two independent health checks every monitoring cycle.
+
+### Local network
+
+Your detected default gateway is pinged to verify that your LAN (router,
+hotspot or VPN endpoint) is reachable.
+
+### Internet
+
+At the same time LANlord performs concurrent connectivity checks against:
+
+- Cloudflare DNS (1.1.1.1)
+- Google Public DNS (8.8.8.8)
+- Quad9 DNS (9.9.9.9)
+
+These checks run in parallel using Python's built-in
+`concurrent.futures.ThreadPoolExecutor`, so the total check time is close
+to a single ping timeout.
+
+Internet is considered available if **any** external endpoint responds.
+
+This allows LANlord to distinguish:
+
+| Gateway | Internet | Meaning |
+|---------|----------|---------|
+| ✅ | ✅ | Healthy |
+| ✅ | ❌ | ISP / WAN outage |
+| ❌ | ❌ | Local network disconnected |
+
 
 ## How fast are alerts?
 

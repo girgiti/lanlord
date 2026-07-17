@@ -403,6 +403,12 @@ def monitor_loop(args, on_status_change=None, on_network_change=None):
             state["internet_status"] = internet_reachable
             state["probe_results"] = results.copy()
             
+        failure_type = None
+        if not gateway_reachable:
+            failure_type = "gateway"
+        elif not internet_reachable:
+            failure_type = "internet"
+
         reachable = gateway_reachable and internet_reachable
         now = timestamp()
 
@@ -416,9 +422,9 @@ def monitor_loop(args, on_status_change=None, on_network_change=None):
                 is_down = False
                 with state_lock:
                     state["status"] = "up"
-                log_event(f"Gateway {display_target} back UP")
+                log_event("Internet restored" if failure_type=="internet" else f"Gateway {display_target} back UP")
                 if on_status_change:
-                    on_status_change(False, args, down_since, display_target)
+                    on_status_change(False, args, down_since, display_target, None)
                 down_since = None
         else:
             if failures >= args.fail_threshold and not is_down:
@@ -427,11 +433,11 @@ def monitor_loop(args, on_status_change=None, on_network_change=None):
                 with state_lock:
                     state["status"] = "down"
                 if display_target:
-                    log_event(f"Gateway {display_target} DOWN")
+                    log_event("Internet unavailable (Gateway reachable)" if failure_type=="internet" else f"Gateway {display_target} DOWN")
                 else:
-                    log_event("No network detected - DOWN")
+                    log_event("Gateway unreachable")
                 if on_status_change:
-                    on_status_change(True, args, down_since, display_target)
+                    on_status_change(True, args, down_since, display_target, failure_type)
 
         time.sleep(args.interval)
 
@@ -476,13 +482,15 @@ def run_cli(args):
               f"IP {ip or 'unknown'}" + (f"/{cidr}" if cidr else "") +
               f", gateway {gateway or 'unknown'}")
 
-    def on_change(is_down, args, down_since, gateway):
+    def on_change(is_down, args, down_since, gateway, failure_type):
         if is_down:
             if gateway:
                 print(f"[{timestamp()}] ALERT: Gateway {gateway} is DOWN "
                       f"(after {args.fail_threshold} failed pings)")
-                notify("Network Down", f"Lost connectivity to gateway {gateway}",
-                       sound=not args.no_sound)
+                if failure_type=="internet":
+                    notify("Internet Unavailable","Gateway reachable. ISP or upstream outage.",sound=not args.no_sound)
+                else:
+                    notify("Gateway Unreachable",f"Lost connectivity to gateway {gateway}",sound=not args.no_sound)
             else:
                 print(f"[{timestamp()}] ALERT: No network detected "
                       f"(after {args.fail_threshold} failed pings)")
@@ -492,8 +500,7 @@ def run_cli(args):
             duration = format_duration(down_since)
             suffix = f" (was down for {duration})" if duration else ""
             print(f"[{timestamp()}] Gateway {gateway} is back UP{suffix}")
-            notify("Network Restored", f"Gateway {gateway} is reachable again.{suffix}",
-                   sound=not args.no_sound)
+            notify("Connectivity Restored",f"Gateway and internet connectivity restored.{suffix}",sound=not args.no_sound)
 
     try:
         monitor_loop(args, on_status_change=on_change, on_network_change=on_network_change)
@@ -524,6 +531,17 @@ PAGE_HTML = """<!DOCTYPE html>
   .footer { margin-top:20px; text-align:center; font-size:12px; color:#5a5a5c; }
   .footer a { color:#5a5a5c; text-decoration:none; }
   .footer a:hover { color:#8e8e93; text-decoration:underline; }
+  .banner {
+    display:none;
+    margin:14px 0 18px;
+    padding:12px;
+    border-radius:8px;
+    border:1px solid #ff453a;
+    background:#4a1d1d;
+    color:#ffe5e5;
+    font-size:14px;
+    line-height:1.4;
+  }
   .dot {
     display:inline-block;
     width:10px;
@@ -551,22 +569,22 @@ PAGE_HTML = """<!DOCTYPE html>
 <body>
 <div class="card">
   <h1>LANlord</h1>
-  <div class="status" id="status">Checking...</div>
+  <div id="banner" class="banner"></div>
+
+  <div class="row">
+      <span><strong>Gateway</strong></span>
+      <span id="gatewayStatus">Checking...</span>
+  </div>
+
+  <div class="row">
+      <span><strong>Internet</strong></span>
+      <span id="internetStatus">Checking...</span>
+  </div>
   <div class="row"><span>Interface</span><span id="interface">-</span></div>
   <div class="row"><span>Local IP</span><span id="ip">-</span></div>
   <div class="row"><span>Netmask</span><span id="netmask">-</span></div>
   <div class="row"><span>Gateway</span><span id="gateway">-</span></div>
-  <h3 style="margin-top:20px;">Connectivity</h3>
-
-  <div class="row">
-      <span>Gateway</span>
-      <span id="gatewayStatus">...</span>
-  </div>
-
-  <div class="row">
-      <span>Internet</span>
-      <span id="internetStatus">...</span>
-  </div>
+  <h3 style="margin-top:20px;">External Connectivity</h3>
 
   <div id="probes" style="margin-top:10px;"></div>
   <div class="row"><span>Last check</span><span id="lastcheck">-</span></div>
@@ -599,7 +617,8 @@ function startBlink() {
   if (blinkTimer) return;
   let on = false;
   blinkTimer = setInterval(() => {
-    document.title = on ? ORIGINAL_TITLE : "GATEWAY DOWN";
+    let alertTitle=window.currentAlertTitle||"NETWORK DOWN";
+    document.title = on ? ORIGINAL_TITLE : "🚨 "+alertTitle;
     on = !on;
   }, 1000);
 }
@@ -631,6 +650,21 @@ async function poll() {
     document.getElementById("internetStatus").innerHTML =
         dot(data.internet_status) +
         (data.internet_status ? "Available" : "Unavailable");
+
+    const banner=document.getElementById("banner");
+    if (data.gateway_status && !data.internet_status){
+        window.currentAlertTitle="INTERNET DOWN";
+        banner.style.display="block";
+        banner.innerHTML="⚠ <strong>Internet unavailable</strong><br>Gateway is still reachable. Likely ISP or upstream outage.";
+    } else if (!data.gateway_status){
+        window.currentAlertTitle="GATEWAY DOWN";
+        banner.style.display="block";
+        banner.innerHTML="⚠ <strong>Gateway unreachable</strong><br>Local network connection appears to be down.";
+    } else {
+        window.currentAlertTitle=null;
+        banner.style.display="none";
+        banner.innerHTML="";
+    }
     
     const probes = document.getElementById("probes");
 
@@ -644,32 +678,29 @@ async function poll() {
     `   )
         .join("");
     
-    const el = document.getElementById("status");
     if (data.status === "down") {
-      el.textContent = "DOWN";
-      el.className = "status down";
       startBlink();
       if (!notifiedDown) {
         notifiedDown = true;
         beep();
         if ("Notification" in window && Notification.permission === "granted") {
-          new Notification("Network Down", { body: "Lost connectivity to gateway " + data.gateway });
+          if (data.gateway_status && !data.internet_status){
+            new Notification("Internet Unavailable",{body:"Gateway reachable. ISP or upstream connection appears down."});
+          } else {
+            new Notification("Gateway Unreachable",{body:"Lost connectivity to gateway "+data.gateway});
+          }
         }
       }
     } else if (data.status === "up") {
-      el.textContent = "UP";
-      el.className = "status up";
       stopBlink();
       if (notifiedDown && lastStatus === "down") {
         beep();
         if ("Notification" in window && Notification.permission === "granted") {
-          new Notification("Network Restored", { body: "Gateway " + data.gateway + " is reachable again." });
+          new Notification("Connectivity Restored",{body:"Gateway and internet connectivity restored."});
         }
       }
       notifiedDown = false;
     } else {
-      el.textContent = "Checking...";
-      el.className = "status";
     }
     lastStatus = data.status;
 
@@ -724,13 +755,15 @@ def run_web(args):
               f"IP {ip or 'unknown'}" + (f"/{cidr}" if cidr else "") +
               f", gateway {gateway or 'unknown'}")
 
-    def on_change(is_down, args, down_since, gateway):
+    def on_change(is_down, args, down_since, gateway, failure_type):
         if is_down:
             if gateway:
                 print(f"[{timestamp()}] ALERT: Gateway {gateway} is DOWN "
                       f"(after {args.fail_threshold} failed pings)")
-                notify("Network Down", f"Lost connectivity to gateway {gateway}",
-                       sound=not args.no_sound)
+                if failure_type=="internet":
+                    notify("Internet Unavailable","Gateway reachable. ISP or upstream outage.",sound=not args.no_sound)
+                else:
+                    notify("Gateway Unreachable",f"Lost connectivity to gateway {gateway}",sound=not args.no_sound)
             else:
                 print(f"[{timestamp()}] ALERT: No network detected "
                       f"(after {args.fail_threshold} failed pings)")
@@ -740,8 +773,7 @@ def run_web(args):
             duration = format_duration(down_since)
             suffix = f" (was down for {duration})" if duration else ""
             print(f"[{timestamp()}] Gateway {gateway} is back UP{suffix}")
-            notify("Network Restored", f"Gateway {gateway} is reachable again.{suffix}",
-                   sound=not args.no_sound)
+            notify("Connectivity Restored",f"Gateway and internet connectivity restored.{suffix}",sound=not args.no_sound)
 
     t = threading.Thread(
         target=monitor_loop,
