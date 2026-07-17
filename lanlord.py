@@ -569,6 +569,7 @@ PAGE_HTML = """<!DOCTYPE html>
 <body>
 <div class="card">
   <h1>LANlord</h1>
+  <div class="status" id="status">Checking...</div>
   <div id="banner" class="banner"></div>
 
   <div class="row">
@@ -650,6 +651,16 @@ async function poll() {
     document.getElementById("internetStatus").innerHTML =
         dot(data.internet_status) +
         (data.internet_status ? "Available" : "Unavailable");
+    
+    const status = document.getElementById("status");
+
+    if (data.gateway_status && data.internet_status) {
+        status.textContent = "UP";
+        status.className = "status up";
+    } else {
+        status.textContent = "DOWN";
+        status.className = "status down";
+    }
 
     const banner=document.getElementById("banner");
     if (data.gateway_status && !data.internet_status){
@@ -707,7 +718,9 @@ async function poll() {
     const hist = document.getElementById("history");
     hist.innerHTML = data.history.map(h => `<div>${h.time} - ${h.event}</div>`).join("");
   } catch (e) {
-    document.getElementById("status").textContent = "Server unreachable";
+        const status = document.getElementById("status");
+        status.textContent = "DOWN";
+        status.className = "status down";
   }
 }
 
