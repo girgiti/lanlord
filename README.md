@@ -88,8 +88,8 @@ Netmask   : 255.255.255.0 (/24)
 Gateway   : 192.168.1.1
 Pinging every 10.0s (silent unless down). Auto-follows network changes. Ctrl+C to stop.
 
-[2026-07-11 15:44:14] ALERT: Gateway 192.168.1.1 is DOWN (after 2 failed pings)
-[2026-07-11 15:44:34] Gateway 192.168.1.1 is back UP (was down for 20s)
+[2026-07-11 15:44:14] ALERT: Internet unavailable (Gateway reachable)
+[2026-07-11 15:44:34] Internet restored (was down for 20s)
 ```
 
 ### Web mode (graphical dashboard)
@@ -112,11 +112,12 @@ default browser automatically.
    the server and ping loop keep running regardless.
 
 While it's open, you'll see:
-- Live Gateway and Internet status
+- Large overall **UP / DOWN** health indicator
+- Separate live **Gateway** and **Internet** status
 - Live interface / IP / netmask / gateway information
 - External connectivity probes (Cloudflare, Google DNS and Quad9)
 - Blinking green/red health indicators
-- Context-aware warning banner
+- Context-aware warning banner explaining whether the failure is a gateway or internet outage
 - Browser notifications that distinguish **Gateway Unreachable** from **Internet Unavailable**
 - Dynamic browser tab title (`🚨 GATEWAY DOWN` / `🚨 INTERNET DOWN`)
 - Event history showing gateway failures, internet outages, recoveries and network changes
@@ -144,6 +145,9 @@ These checks run in parallel using Python's built-in
 to a single ping timeout.
 
 Internet is considered available if **any** external endpoint responds.
+
+The local gateway and internet are tracked independently, allowing LANlord
+to detect ISP/WAN outages even when your router is still fully reachable.
 
 This allows LANlord to distinguish:
 
@@ -220,6 +224,12 @@ python3 lanlord.py --probe-host 8.8.8.8
 - **Pinging** uses the OS's native `ping` binary with the correct flags
   per platform (`-c`/`-W` on Linux, `-c`/`-t` on macOS, `-n`/`-w` on
   Windows).
+
+- **Internet monitoring** performs concurrent pings to multiple public
+  endpoints (Cloudflare DNS, Google Public DNS and Quad9) using Python's
+  built-in `concurrent.futures.ThreadPoolExecutor`, allowing LANlord to
+  distinguish local gateway failures from ISP/WAN outages while keeping
+  monitoring latency low.
 
 ### VPN and point-to-point tunnels
 
@@ -445,6 +455,20 @@ these two things first:
 - **One port, one instance.** Running two copies of `--web` at once
   (e.g. a manual run plus a startup service) will conflict on the same
   port — see the launchd note above.
+
+## What's new
+
+Recent enhancements include:
+
+- Independent Gateway and Internet health monitoring
+- Concurrent internet connectivity checks using multiple providers
+- Detection of ISP/WAN outages even when the local gateway remains reachable
+- Separate Gateway and Internet indicators in the dashboard
+- Large overall **UP / DOWN** health indicator
+- External connectivity status panel
+- Context-aware notifications and browser alerts
+- Improved event history with gateway vs internet outage reporting
+- Zero additional dependencies — still uses only the Python standard library
 
 ## License
 
